@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D 射擊迷宮遊戲</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #0d1117;
+            color: #c9d1d9;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #161b22;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            width: 100%;
+            max-width: 800px;
+        }
+        h1 {
+            color: #58a6ff;
+            text-align: center;
+            margin-bottom: 20px;
+            text-shadow: 0 0 10px rgba(88, 166, 255, 0.5);
+        }
+        canvas {
+            background-color: #010409;
+            border: 2px solid #30363d;
+            border-radius: 8px;
+            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+            width: 100%;
+            height: auto;
+            max-height: 600px;
+        }
+        .score-box {
+            background-color: #21262d;
+            padding: 10px 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px solid #30363d;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #c9d1d9;
+        }
+        .message-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px 40px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <h1>2D 射擊迷宮遊戲</h1>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div class="score-box">分數: <span id="scoreValue">0</span></div>
+</div>
+
+<div id="messageBox" class="message-box">
+    <p id="messageText"></p>
+    <!-- 已將提示訊息從「空白鍵」改為「E 鍵」 -->
+    <p>按下 E 鍵重新開始</p>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreValueSpan = document.getElementById('scoreValue');
+        const messageBox = document.getElementById('messageBox');
+        const messageText = document.getElementById('messageText');
+
+        // 遊戲設定 (Game settings)
+        const GAME_WIDTH = canvas.width;
+        const GAME_HEIGHT = canvas.height;
+        const GRID_SIZE = 40;
+        const MAZE_WIDTH = Math.floor(GAME_WIDTH / GRID_SIZE);
+        const MAZE_HEIGHT = Math.floor(GAME_HEIGHT / GRID_SIZE);
+        
+        const PLAYER_SPEED = 5;
+        const BULLET_SPEED = 10;
+        const ENEMY_SPEED = 2;
+        const ENEMY_SPAWN_INTERVAL = 2000; // 敵人產生間隔 (Enemy spawn interval)
+
+        let score = 0;
+        let lastEnemySpawnTime = Date.now();
+        let isGameOver = false;
+
+        // 迷宮資料 (Maze data)
+        let maze = [];
+
+        // 玩家物件 (Player object)
+        const player = {
+            x: GRID_SIZE,
+            y: GRID_SIZE,
+            width: GRID_SIZE * 0.7,
+            height: GRID_SIZE * 0.7,
+            dx: 0,
+            dy: 0,
+            lastDx: 0, // 上次射擊方向 (Last shot direction)
+            lastDy: -1 // 預設向上 (Default to up)
+        };
+
+        // 子彈和敵人的陣列 (Bullet and enemy arrays)
+        let bullets = [];
+        let enemies = [];
+
+        // 鍵盤狀態 (Keyboard state)
+        const keys = {};
+
+        // 繪製物件的函式 (Function to draw objects)
+        function drawObject(obj, color, shape = 'rect') {
+            ctx.fillStyle = color;
+            if (shape === 'rect') {
+                ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+            }
+        }
+
+        // 繪製迷宮 (Draw maze)
+        function drawMaze() {
+            ctx.fillStyle = '#333';
+            for (let r = 0; r < MAZE_HEIGHT; r++) {
+                for (let c = 0; c < MAZE_WIDTH; c++) {
+                    if (maze[r][c] === 1) {
+                        ctx.fillRect(c * GRID_SIZE, r * GRID_SIZE, GRID_SIZE, GRID_SIZE);
+                    }
+                }
+            }
+        }
+
+        // 繪製所有物件 (Draw all objects)
+        function draw() {
+            // 清空畫布 (Clear canvas)
+            ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+            // 繪製迷宮 (Draw maze)
+            drawMaze();
+
+            // 繪製玩家 (Draw player)
+            drawObject(player, '#58a6ff');
+
+            // 繪製子彈 (Draw bullets)
+            bullets.forEach(bullet => {
+                // 子彈變小且為正方形 (Bullet is small and square for 4-way travel)
+                drawObject(bullet, '#ffc0cb', 'rect');
+            });
+
+            // 繪製敵人 (Draw enemies)
+            enemies.forEach(enemy => {
+                drawObject(enemy, '#f85149');
+            });
+        }
+
+        // 產生迷宮 (Generate maze - Simplified Prim's Algorithm)
+        function generateMaze() {
+            maze = Array.from({ length: MAZE_HEIGHT }, () => Array(MAZE_WIDTH).fill(1));
+            
+            let stack = [];
+            let startNode = { r: 1, c: 1 };
+            stack.push(startNode);
+            maze[startNode.r][startNode.c] = 0; // Mark as path
+
+            const directions = [[0, 2], [0, -2], [2, 0], [-2, 0]];
+
+            while (stack.length > 0) {
+                let current = stack[stack.length - 1];
+                let unvisitedNeighbors = [];
+
+                for (let [dr, dc] of directions) {
+                    let r = current.r + dr;
+                    let c = current.c + dc;
+                    if (r > 0 && r < MAZE_HEIGHT - 1 && c > 0 && c < MAZE_WIDTH - 1 && maze[r][c] === 1) {
+                        unvisitedNeighbors.push({ r: r, c: c });
+                    }
+                }
+
+                if (unvisitedNeighbors.length > 0) {
+                    const next = unvisitedNeighbors[Math.floor(Math.random() * unvisitedNeighbors.length)];
+                    const wallR = (current.r + next.r) / 2;
+                    const wallC = (current.c + next.c) / 2;
+                    
+                    maze[wallR][wallC] = 0;
+                    maze[next.r][next.c] = 0;
+                    stack.push(next);
+                } else {
+                    stack.pop();
+                }
+            }
+        }
+
+        // 檢查碰撞 (Check for collision - rectangles)
+        function checkCollision(rect1, rect2) {
+            return (
+                rect1.x < rect2.x + rect2.width &&
+                rect1.x + rect1.width > rect2.x &&
+                rect1.y < rect2.y + rect2.height &&
+                rect1.y + rect1.height > rect2.y
+            );
+        }
+        
+        // 檢查與迷宮牆壁的碰撞 (Check collision with maze walls)
+        function checkMazeCollision(x, y, width, height) {
+            // 確保物件邊界不會超出地圖範圍 (Ensure object boundaries are within map bounds)
+            if (x < 0 || x + width > GAME_WIDTH || y < 0 || y + height > GAME_HEIGHT) {
+                return true; 
+            }
+
+            const left = Math.floor(x / GRID_SIZE);
+            const top = Math.floor(y / GRID_SIZE);
+            const right = Math.floor((x + width) / GRID_SIZE);
+            const bottom = Math.floor((y + height) / GRID_SIZE);
+
+            for (let r = top; r <= bottom; r++) {
+                for (let c = left; c <= right; c++) {
+                    // 檢查邊界條件 (Check boundary conditions)
+                    if (r >= 0 && r < MAZE_HEIGHT && c >= 0 && c < MAZE_WIDTH && maze[r][c] === 1) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // 設定隨機方向給敵人 (Utility to set a random cardinal direction for enemy)
+        function setRandomDirection(obj) {
+            const directions = [
+                { dx: 1, dy: 0 }, { dx: -1, dy: 0 },
+                { dx: 0, dy: 1 }, { dx: 0, dy: -1 }
+            ];
+            const dir = directions[Math.floor(Math.random() * directions.length)];
+            obj.dx = dir.dx;
+            obj.dy = dir.dy;
+        }
+
+        // 更新遊戲狀態 (Update game state)
+        function update() {
+            if (isGameOver) return;
+
+            // --- 玩家移動 (Player Movement) ---
+            const oldX = player.x;
+            const oldY = player.y;
+
+            player.x += player.dx * PLAYER_SPEED;
+            player.y += player.dy * PLAYER_SPEED;
+
+            // 處理玩家與牆壁的碰撞 (Handle player-wall collision)
+            if (checkMazeCollision(player.x, player.y, player.width, player.height)) {
+                // 如果同時移動 x 和 y 軸導致碰撞，嘗試只移動其中一軸 (If both X and Y move cause collision, try moving one axis at a time)
+                
+                // 嘗試只移動 X (Try X only)
+                if (!checkMazeCollision(player.x, oldY, player.width, player.height)) {
+                    player.y = oldY; // Revert Y, keep X
+                } 
+                // 嘗試只移動 Y (Try Y only)
+                else if (!checkMazeCollision(oldX, player.y, player.width, player.height)) {
+                    player.x = oldX; // Revert X, keep Y
+                } 
+                // 兩軸都無法移動 (Cannot move in both axes)
+                else {
+                    player.x = oldX;
+                    player.y = oldY;
+                }
+            }
+
+
+            // --- 子彈移動 (Bullet Movement) ---
+            bullets = bullets.filter(bullet => {
+                bullet.x += bullet.dx * BULLET_SPEED;
+                bullet.y += bullet.dy * BULLET_SPEED;
+                // 保持子彈在遊戲邊界內 (Keep bullets within game bounds)
+                return bullet.x + bullet.width > 0 && 
+                       bullet.x < GAME_WIDTH && 
+                       bullet.y + bullet.height > 0 && 
+                       bullet.y < GAME_HEIGHT;
+            });
+            
+            // --- 敵人移動和碰撞 (Enemy Movement and Collision) ---
+            enemies.forEach(enemy => {
+                const oldX = enemy.x;
+                const oldY = enemy.y;
+
+                // 嘗試移動 (Attempt to move)
+                enemy.x += enemy.dx * ENEMY_SPEED;
+                enemy.y += enemy.dy * ENEMY_SPEED;
+
+                let hitWall = false;
+
+                // 檢查牆壁碰撞 (Check wall collision)
+                if (checkMazeCollision(enemy.x, enemy.y, enemy.width, enemy.height)) {
+                    // 撞牆後回退位置 (Revert to old position after hitting a wall)
+                    enemy.x = oldX;
+                    enemy.y = oldY;
+                    hitWall = true;
+                } 
+                
+                // 如果撞牆，或每隔一段時間 (1500ms)，隨機改變方向 (Change direction if hit wall or after a time interval)
+                if (hitWall || Date.now() - enemy.lastDirectionChange > 1500) {
+                    setRandomDirection(enemy);
+                    enemy.lastDirectionChange = Date.now();
+                }
+            });
+
+
+            // --- 碰撞偵測 (Collision detection) ---
+
+            // 子彈與敵人 (Bullets vs. Enemies)
+            // 由於子彈和敵人陣列都會被修改，我們使用傳統的 for 迴圈來確保正確的陣列操作 (Use traditional for loops for safe array manipulation)
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    if (checkCollision(bullets[i], enemies[j])) {
+                        bullets.splice(i, 1);
+                        enemies.splice(j, 1);
+                        score += 10;
+                        scoreValueSpan.textContent = score;
+                        break; // 停止內層迴圈 (Stop inner loop)
+                    }
+                }
+            }
+
+            // 玩家與敵人 (Player vs. Enemies)
+            enemies.forEach(enemy => {
+                if (checkCollision(player, enemy)) {
+                    endGame();
+                }
+            });
+
+            // --- 敵人生成 (Enemy Spawning) ---
+            const currentTime = Date.now();
+            if (currentTime - lastEnemySpawnTime > ENEMY_SPAWN_INTERVAL) {
+                spawnEnemy();
+                lastEnemySpawnTime = currentTime;
+            }
+        }
+
+        // 產生敵人 (Spawn an enemy)
+        function spawnEnemy() {
+            // 隨機在迷宮路徑上生成敵人 (Randomly spawn an enemy on a maze path)
+            let r, c;
+            do {
+                r = Math.floor(Math.random() * MAZE_HEIGHT);
+                c = Math.floor(Math.random() * MAZE_WIDTH);
+            } while (maze[r][c] === 1); // 確保在路徑上 (Make sure it's on a path)
+            
+            const newEnemy = { 
+                x: c * GRID_SIZE, 
+                y: r * GRID_SIZE, 
+                width: GRID_SIZE * 0.7, 
+                height: GRID_SIZE * 0.7,
+                dx: 0, // 敵人移動方向 (Enemy movement direction)
+                dy: 0,  
+                lastDirectionChange: Date.now() // 記錄上次方向改變時間 (Time of last direction change)
+            };
+            setRandomDirection(newEnemy); // 設定初始隨機方向 (Set initial random direction)
+            enemies.push(newEnemy);
+        }
+
+        // 處理鍵盤事件 (Handle keyboard events)
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            
+            // 水平移動 (Horizontal Movement)
+            if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') {
+                player.dx = -1;
+                player.lastDx = -1; player.lastDy = 0; // 更新射擊方向 (Update shot direction)
+            } else if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') {
+                player.dx = 1;
+                player.lastDx = 1; player.lastDy = 0; // 更新射擊方向
+            }
+
+            // 垂直移動 (Vertical Movement)
+            if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') {
+                player.dy = -1;
+                player.lastDx = 0; player.lastDy = -1; // 更新射擊方向
+            } else if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') {
+                player.dy = 1;
+                player.lastDx = 0; player.lastDy = 1; // 更新射擊方向
+            }
+
+            // 重新開始遊戲 (Reset Game) - E 鍵
+            if ((e.key === 'e' || e.key === 'E') && isGameOver) {
+                resetGame();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+            // 停止水平移動 (Stop horizontal movement)
+            if (e.key === 'a' || e.key === 'A' || e.key === 'd' || e.key === 'D' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                player.dx = 0;
+            }
+            // 停止垂直移動 (Stop vertical movement)
+            if (e.key === 'w' || e.key === 'W' || e.key === 's' || e.key === 'S' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                player.dy = 0;
+            }
+        });
+
+        // 處理滑鼠事件：點擊發射子彈 (Handle mouse events: Click to shoot)
+        canvas.addEventListener('mousedown', (e) => {
+            // 檢查是否是滑鼠左鍵 (e.button === 0) 且遊戲未結束
+            if (e.button === 0 && !isGameOver) {
+                bullets.push({
+                    // 子彈從玩家中心發射 (Bullet spawns from player center)
+                    x: player.x + player.width / 2 - 2.5,
+                    y: player.y + player.height / 2 - 2.5,
+                    width: 5,
+                    height: 5, // 調整為正方形子彈 (Adjusted for square bullet)
+                    dx: player.lastDx, // 使用最後移動方向 (Use last movement direction)
+                    dy: player.lastDy 
+                });
+            }
+        });
+
+        // 遊戲結束函式 (Game over function)
+        function endGame() {
+            isGameOver = true;
+            messageBox.style.display = 'block';
+            messageText.textContent = `遊戲結束！你的分數是 ${score}。`;
+        }
+
+        // 重設遊戲 (Reset game)
+        function resetGame() {
+            isGameOver = false;
+            score = 0;
+            scoreValueSpan.textContent = score;
+            bullets = [];
+            enemies = [];
+            
+            // 重新生成迷宮 (Regenerate maze)
+            generateMaze();
+
+            // 將玩家放回起始點 (Place player back at the start)
+            player.x = GRID_SIZE;
+            player.y = GRID_SIZE;
+            player.dx = 0;
+            player.dy = 0;
+            player.lastDx = 0;
+            player.lastDy = -1;
+
+            messageBox.style.display = 'none';
+        }
+
+        // 主遊戲循環 (Main game loop)
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 啟動遊戲 (Start game)
+        resetGame();
+        gameLoop();
+    });
+</script>
+
+</body>
+</html>
